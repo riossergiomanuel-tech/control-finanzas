@@ -53,15 +53,30 @@ def update_billetera(metodo, monto, operacion="restar"):
     conn.commit()
     conn.close()
 
-menu = st.sidebar.radio("Navegación", ["📊 Dashboard", "👛 Mi Billetera", "⚡ Registro Rápido", "💳 Asesor de Pagos"])
+menu = st.sidebar.radio("Navegación", ["📊 Dashboard", "👛 Mi Billetera", "⚡ Registro Rápido", "💳 Asesor de Pagos", "📉 Deudas"])
 
-if menu == "👛 Mi Billetera":
+if menu == "📊 Dashboard":
+    st.title("📊 Panel de Control Financiero")
+    conn = get_db_connection()
+    deudas_df = pd.read_sql_query("SELECT * FROM deudas WHERE activa=1", conn)
+    billetera_df = pd.read_sql_query("SELECT sum(saldo) as total FROM billetera", conn)
+    total_deuda = deudas_df['saldo'].sum()
+    total_liquidez = billetera_df.iloc[0]['total']
+    
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Deuda Total", f"${total_deuda:,.2f}", delta_color="inverse")
+    c2.metric("Liquidez Total", f"${total_liquidez:,.2f}")
+    c3.metric("Patrimonio Neto", f"${total_liquidez - total_deuda:,.2f}")
+    conn.close()
+
+elif menu == "👛 Mi Billetera":
     st.title("👛 Estado de Liquidez Real")
     conn = get_db_connection()
     saldos = pd.read_sql_query("SELECT * FROM billetera", conn)
     col1, col2 = st.columns(2)
     with col1: st.metric("💰 Banco / Débito", f"${saldos.iloc[1]['saldo']:,.2f}")
     with col2: st.metric("💵 Efectivo", f"${saldos.iloc[0]['saldo']:,.2f}")
+    conn.close()
 
 elif menu == "⚡ Registro Rápido":
     st.title("⚡ Registro y Descuento Dinámico")
@@ -81,3 +96,8 @@ elif menu == "💳 Asesor de Pagos":
     orden = "saldo" if "Bola" in metodo else "tasa_cat"
     target = df.sort_values(orden, ascending=("saldo" in orden)).iloc[0]
     st.info(f"Prioridad máxima: Pagar el mínimo de todas y todo el sobrante a **{target['acreedor']}**")
+
+elif menu == "📉 Deudas":
+    st.title("📉 Gestión de Acreedores")
+    df = pd.read_sql_query("SELECT acreedor, saldo, pago_minimo, tasa_cat, fecha_corte FROM deudas WHERE activa=1", get_db_connection())
+    st.dataframe(df, use_container_width=True)
