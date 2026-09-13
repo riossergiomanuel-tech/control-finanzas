@@ -51,6 +51,14 @@ st.markdown("""
         font-size: 15px;
         line-height: 1.5;
     }
+    .uni-card {
+        background-color: #161c2e;
+        border: 1px solid #388bfd;
+        border-radius: 10px;
+        padding: 16px 20px;
+        color: #f0f6fc;
+        margin-bottom: 20px;
+    }
     .vencimiento-card {
         background-color: #261313;
         border: 1px solid #f85149;
@@ -121,7 +129,7 @@ def init_db():
         motivo TEXT)
     """)
     
-    # Migración segura
+    # Migración de columnas
     cols_d = [r[1] for r in c.execute("PRAGMA table_info(deudas)").fetchall()]
     if "fecha_corte" in cols_d and "dia_corte" not in cols_d:
         try: c.execute("ALTER TABLE deudas ADD COLUMN dia_corte INTEGER DEFAULT 15")
@@ -137,7 +145,9 @@ def init_db():
         ('porcentaje_ahorro', 10.0),
         ('gasto_esencial_semanal', 1000.0),
         ('fondo_ahorro_acumulado', 320.0),
-        ('presupuesto_hormiga_semanal', 400.0)
+        ('presupuesto_hormiga_semanal', 400.0),
+        ('uni_mensual', 2700.0),
+        ('uni_cuatrimestral', 2000.0)
     ]
     for k, v in defaults:
         c.execute("INSERT OR IGNORE INTO configuracion VALUES (?, ?)", (k, v))
@@ -145,22 +155,24 @@ def init_db():
     c.execute("INSERT OR IGNORE INTO billetera VALUES ('Banco', 2200.0)")
     c.execute("INSERT OR IGNORE INTO billetera VALUES ('Efectivo', 800.0)")
     
-    c.execute("SELECT COUNT(*) FROM deudas")
-    if c.fetchone()[0] == 0:
-        deudas = [
-            ("BBVA", 18509.15, 950.0, 48.0, 12, "Tarjeta Crédito"),
-            ("Ualá", 6995.34, 550.0, 70.0, 25, "Tarjeta Crédito"),
-            ("Mercado Pago (MSI)", 815.82, 815.82, 0.0, 20, "Meses sin Intereses"),
-            ("Coppel", 4200.0, 450.0, 65.0, 15, "Departamental"),
-            ("Nu", 3400.0, 350.0, 52.0, 18, "Tarjeta Crédito"),
-            ("DiDi", 2600.0, 450.0, 95.0, 10, "Préstamo / Tarjeta"),
-            ("Vexi", 2500.0, 350.0, 78.0, 28, "Tarjeta Crédito"),
-            ("Stori", 1477.17, 250.0, 99.0, 22, "Tarjeta Crédito")
-        ]
-        try:
-            c.executemany("INSERT INTO deudas (acreedor, saldo, pago_minimo, tasa_cat, dia_corte, tipo_cuenta) VALUES (?,?,?,?,?,?)", deudas)
-        except:
-            pass
+    # Insertar siempre las cuentas si faltan (incluyendo Universidad)
+    cuentas_requeridas = [
+        ("Universidad (Mensualidad)", 2700.0, 2700.0, 0.0, 5, "Educación / Fijo"),
+        ("Universidad (Reinscripción)", 2000.0, 500.0, 0.0, 1, "Educación / Cuatrimestre"),
+        ("BBVA", 18509.15, 950.0, 48.0, 12, "Tarjeta Crédito"),
+        ("Ualá", 6995.34, 550.0, 70.0, 25, "Tarjeta Crédito"),
+        ("Mercado Pago (MSI)", 815.82, 815.82, 0.0, 20, "Meses sin Intereses"),
+        ("Coppel", 4200.0, 450.0, 65.0, 15, "Departamental"),
+        ("Nu", 3400.0, 350.0, 52.0, 18, "Tarjeta Crédito"),
+        ("DiDi", 2600.0, 450.0, 95.0, 10, "Préstamo / Tarjeta"),
+        ("Vexi", 2500.0, 350.0, 78.0, 28, "Tarjeta Crédito"),
+        ("Stori", 1477.17, 250.0, 99.0, 22, "Tarjeta Crédito")
+    ]
+    for d in cuentas_requeridas:
+        c.execute("""
+            INSERT OR IGNORE INTO deudas (acreedor, saldo, pago_minimo, tasa_cat, dia_corte, tipo_cuenta) 
+            VALUES (?,?,?,?,?,?)
+        """, d)
 
     conn.commit()
     conn.close()
@@ -257,7 +269,7 @@ def save_edited_deudas(edited_df):
             float(row['Saldo Total ($)']),
             float(row['Pago Mínimo ($)']),
             int(row['Día de Pago (1-31)']),
-            float(row.get('CAT (%)', 50.0)),
+            float(row.get('CAT (%)', 0.0)),
             row['Cuenta']
         ))
     conn.commit()
@@ -278,7 +290,7 @@ def add_movimiento(f, c, cat, t, m, met):
     update_billetera_delta(met, m, "restar")
 
 # ---------------------------------------------------------
-# BARRA LATERAL (SUELDO VARIABLE Y BILLETERA)
+# BARRA LATERAL (SUELDO VARIABLE Y GASTOS EDUCATIVOS)
 # ---------------------------------------------------------
 cfg = get_cfg()
 ingreso_base = cfg.get("ingreso_base", 3200.0)
@@ -288,6 +300,12 @@ pct_ahorro = cfg.get("porcentaje_ahorro", 10.0)
 reserva_esencial = cfg.get("gasto_esencial_semanal", 1000.0)
 presupuesto_hormiga = cfg.get("presupuesto_hormiga_semanal", 400.0)
 fondo_ahorro_total = cfg.get("fondo_ahorro_acumulado", 320.0)
+
+# Gastos de Universidad:
+uni_mensual = cfg.get("uni_mensual", 2700.0)
+uni_cuatri = cfg.get("uni_cuatrimestral", 2000.0)
+# Reserva semanal necesaria: $675 mensual + ~$154 cuatrimestral
+reserva_uni_semanal = (uni_mensual / 4.0) + (uni_cuatri / 13.0)
 
 ingreso_neto_semana = max(0.0, ingreso_base + horas_extras - descuentos)
 
@@ -306,7 +324,7 @@ with st.sidebar:
         nuevos_descuentos = st.number_input("➖ Faltas/Salud:", min_value=0.0, value=float(descuentos), step=50.0)
         
     calc_neto = max(0.0, nuevo_base + nuevas_extras - nuevos_descuentos)
-    st.metric("💵 Total Esta Semana", f"${calc_neto:,.2f} MXN")
+    st.metric("💵 Total a Cobrar", f"${calc_neto:,.2f} MXN")
     
     nuevo_pct = st.slider("Meta Ahorro (%):", min_value=0, max_value=30, value=int(pct_ahorro), step=1)
     nuevo_tope_hormiga = st.number_input("Tope Gastos Hormiga ($):", min_value=50.0, value=float(presupuesto_hormiga), step=50.0)
@@ -324,11 +342,12 @@ with st.sidebar:
     st.markdown("---")
     menu = st.radio(
         "Navegación:",
-        ["Dashboard", "💎 Fondo de Ahorro", "📅 Vencimientos y Fechas", "Mi Billetera", "Registro Rápido", "Asesor de Pagos", "Deudas"],
+        ["Dashboard", "🎓 Universidad", "💎 Fondo de Ahorro", "📅 Vencimientos y Fechas", "Mi Billetera", "Registro Rápido", "Asesor de Pagos", "Deudas"],
         index=0
     )
     st.markdown("---")
-    st.caption(f"🏦 Banco: ${saldo_banco:,.2f} | 💵 Efectivo: ${saldo_efectivo:,.2f}")
+    st.caption(f"🏦 Banco: ${saldo_banco:,.2f} \vert{} 💵 Efectivo: ${saldo_efectivo:,.2f}")
+    st.caption(f"🎓 Reserva Uni Semanal: ${reserva_uni_semanal:,.2f}")
     st.caption(f"💎 Fondo Guardado: ${fondo_ahorro_total:,.2f}")
 
 # ---------------------------------------------------------
@@ -341,9 +360,12 @@ if menu == "Dashboard":
     df_movs = get_movimientos()
     hoy = date.today()
     
-    total_deuda = df_deudas['saldo'].sum()
-    minimos_totales = df_deudas['pago_minimo'].sum()
-    minimos_semana = minimos_totales / 4.0
+    # Separar créditos bancarios/fintechs de gastos de estudio
+    df_creditos = df_deudas[~df_deudas['acreedor'].str.contains("Universidad")].copy()
+    total_deuda_creditos = df_creditos['saldo'].sum()
+    minimos_creditos_mes = df_creditos['pago_minimo'].sum()
+    minimos_creditos_sem = minimos_creditos_mes / 4.0
+    
     ahorro_meta = ingreso_neto_semana * (pct_ahorro / 100.0)
     ahorrado_esta_semana = get_ahorro_semana()
     
@@ -356,14 +378,15 @@ if menu == "Dashboard":
         gastos_variables = movs_7[movs_7['tipo'] == 'Variable']['monto'].sum()
         gastos_hormiga = movs_7[movs_7['categoria'] == 'Gasto Hormiga']['monto'].sum()
         
-    dinero_libre = max(0.0, ingreso_neto_semana - ahorro_meta - minimos_semana - reserva_esencial - gastos_variables)
+    # Dinero libre protegiendo Universidad ($828.85/sem), Ahorro, Comida y Mínimos:
+    dinero_libre = max(0.0, ingreso_neto_semana - ahorro_meta - reserva_uni_semanal - minimos_creditos_sem - reserva_esencial - gastos_variables)
 
     # 4 TARJETAS KPI
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.metric(label="💵 Ingreso Esta Semana", value=f"${ingreso_neto_semana:,.2f}", delta=f"Base: ${ingreso_base:,.2f}")
     with c2:
-        st.metric(label="💡 ¿Cuánto puedes gastar?", value=f"${dinero_libre:,.2f}", delta="↑ Libre tras mínimos y ahorro")
+        st.metric(label="💡 ¿Cuánto puedes gastar?", value=f"${dinero_libre:,.2f}", delta="↑ Protegiendo Uni y Ahorro")
     with c3:
         if (ahorrado_esta_semana >= ahorro_meta and ahorro_meta > 0) or fondo_ahorro_total >= ahorro_meta:
             st.metric(label="💎 Ahorro Semanal", value=f"${ahorro_meta:,.2f}", delta="✅ ¡Meta Cumplida!")
@@ -371,7 +394,17 @@ if menu == "Dashboard":
             falta = max(0.0, ahorro_meta - ahorrado_esta_semana)
             st.metric(label="💎 Ahorro Sugerido", value=f"${ahorro_meta:,.2f}", delta=f"Faltan ${falta:,.2f}", delta_color="inverse")
     with c4:
-        st.metric(label="🚨 Deuda Total Acumulada", value=f"${total_deuda:,.2f}", delta=f"${minimos_totales:,.2f} mínimos/mes", delta_color="inverse")
+        st.metric(label="🚨 Deuda Tarjetas/Préstamos", value=f"${total_deuda_creditos:,.2f}", delta=f"${minimos_creditos_mes:,.2f} mínimos/mes", delta_color="inverse")
+
+    # ALERTA DE UNIVERSIDAD (PROTEGIDA)
+    st.markdown(f"""
+    <div class="uni-card">
+        🎓 <b>Apartado Universitario Protegido de Esta Semana: ${reserva_uni_semanal:,.2f} MXN</b><br>
+        • Mensualidad ($2,700/mes) ➔ Apartar <b>${(uni_mensual/4.0):,.2f} por semana</b>.<br>
+        • Reinscripción cuatrimestral ($2,000 cada 3 meses) ➔ Apartar <b>${(uni_cuatri/13.0):,.2f} por semana</b>.<br>
+        <i>Este dinero ya fue restado de tu dinero libre para que nunca arriesgues tus estudios ni te quedes corto en el corte escolar.</i>
+    </div>
+    """, unsafe_allow_html=True)
 
     # ALERTA DE VENCIMIENTOS SEMANALES
     proximos_7_dias = [(hoy + timedelta(days=i)).day for i in range(8)]
@@ -386,35 +419,29 @@ if menu == "Dashboard":
     if vencimientos_semana:
         st.markdown(f"""
         <div class="vencimiento-card">
-            <h4>📅 ¡Atención! Deudas que vencen en los próximos 7 días:</h4>
+            <h4>📅 ¡Atención! Pagos que vencen en los próximos 7 días:</h4>
             {'<br>'.join(vencimientos_semana)}<br><br>
             <b>Total a apartar de este sueldo para estos pagos:</b> ${total_minimos_semana:,.2f} MXN
         </div>
         """, unsafe_allow_html=True)
-    else:
-        st.markdown("""
-        <div class="freedom-card">
-            <b>📅 Vencimientos Semanales:</b> No tienes tarjetas que venzan en los próximos 7 días. ¡Buen momento para avanzar en abonos a capital!
-        </div>
-        """, unsafe_allow_html=True)
 
     # PROYECCIÓN DE LIBERTAD FINANCIERA
-    pago_semanal_estimado = max(200.0, minimos_semana + dinero_libre * 0.5)
-    semanas_libertad = int(total_deuda / pago_semanal_estimado) if pago_semanal_estimado > 0 else 52
+    pago_semanal_estimado = max(200.0, minimos_creditos_sem + dinero_libre * 0.5)
+    semanas_libertad = int(total_deuda_creditos / pago_semanal_estimado) if pago_semanal_estimado > 0 else 52
     fecha_libertad = hoy + timedelta(weeks=semanas_libertad)
     meses_libertad = round(semanas_libertad / 4.33, 1)
 
     st.markdown(f"""
     <div class="freedom-card">
-        <h3>⏳ Proyección de Libertad Financiera (Deuda Cero)</h3>
-        Con tu plan de abonos y frenando el bicicleteo, se proyecta liquidar tus $40,497.48 en aproximadamente <b>{semanas_libertad} semanas (~{meses_libertad} meses)</b>.<br>
+        <h3>⏳ Proyección de Libertad Financiera (Tarjetas y Préstamos en Cero)</h3>
+        Con tu plan de abonos y frenando el bicicleteo, se proyecta liquidar tus tarjetas en aproximadamente <b>{semanas_libertad} semanas (~{meses_libertad} meses)</b>.<br>
         🎯 <b>Fecha estimada en que quedarás en $0 de deuda:</b> <u>{fecha_libertad.strftime('%d de %B de %Y')}</u>.
     </div>
     """, unsafe_allow_html=True)
 
     col_g1, col_g2 = st.columns(2)
     with col_g1:
-        st.subheader("📊 Distribución de tus Deudas por Entidad")
+        st.subheader("📊 Distribución de tus Cuentas por Entidad")
         st.bar_chart(df_deudas.set_index("acreedor")['saldo'])
     with col_g2:
         st.subheader("⚡ Semáforo de Gastos Hormiga")
@@ -426,7 +453,7 @@ if menu == "Dashboard":
         elif gastos_hormiga < presupuesto_hormiga:
             estado_semaforo = f"🟡 <b>Semáforo Amarillo:</b> Precaución. Has gastado ${gastos_hormiga:,.2f} de ${presupuesto_hormiga:,.2f}. Te quedan solo <b>${(presupuesto_hormiga - gastos_hormiga):,.2f}</b>."
         else:
-            estado_semaforo = f"🔴 <b>Semáforo Rojo:</b> ¡Tope alcanzado! Has gastado ${gastos_hormiga:,.2f} de ${presupuesto_hormiga:,.2f}. Detén los antojos hasta el siguiente cobro."
+            estado_semaforo = f"🔴 <b>Semáforo Rojo:</b> ¡Tope alcanzado! Has gastado ${gastos_hormiga:,.2f} de${presupuesto_hormiga:,.2f}. Detén los antojos hasta el siguiente cobro."
 
         st.markdown(f"""
         <div class="hormiga-card">
@@ -438,7 +465,42 @@ if menu == "Dashboard":
         """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# VISTA 2: FONDO DE AHORRO
+# VISTA 2: UNIVERSIDAD DEDICADA
+# ---------------------------------------------------------
+elif menu == "🎓 Universidad":
+    st.title("🎓 Planeador de Gastos Universitarios")
+    st.caption("Planificación exacta para mensualidades y pagos cuatrimestrales:")
+    
+    c_u1, c_u2, c_u3 = st.columns(3)
+    with c_u1:
+        st.metric("🎓 Mensualidad Universidad", f"${uni_mensual:,.2f} MXN", delta="Apartar $675.00 / semana")
+    with c_u2:
+        st.metric("📚 Reinscripción Cuatrimestral", f"${uni_cuatri:,.2f} MXN", delta="Apartar $153.85 / semana")
+    with c_u3:
+        st.metric("🛡️ Cuota Semanal Total Protegida", f"${reserva_uni_semanal:,.2f} MXN", delta="Prioridad intocable")
+
+    st.markdown("---")
+    st.subheader("⚙️ Configuración de Costos Universitarios")
+    with st.form("form_uni"):
+        col_un1, col_un2 = st.columns(2)
+        with col_un1:
+            n_mens = st.number_input("Costo de Mensualidad ($):", min_value=0.0, value=float(uni_mensual), step=100.0)
+        with col_un2:
+            n_cuat = st.number_input("Costo de Reinscripción Cuatrimestral ($):", min_value=0.0, value=float(uni_cuatri), step=100.0)
+        if st.form_submit_button("Guardar Costos Universitarios"):
+            set_cfg("uni_mensual", n_mens)
+            set_cfg("uni_cuatrimestral", n_cuat)
+            st.success("¡Costos actualizados correctamente!")
+            st.rerun()
+
+    st.info("""
+    💡 **Estrategia para no sufrir a fin de cuatrimestre:**
+    En lugar de juntar los $2,000 de golpe la semana de reinscripción, el sistema ya te resta **$154 pesos de tu sueldo cada semana**. 
+    Guárdalos en tu **Fondo de Ahorro** bajo la etiqueta "Apartado Reinscripción Universidad". Cuando llegue el día de pago, ya tendrás los $2,000 listos sin pedir prestado ni tocar crédito.
+    """)
+
+# ---------------------------------------------------------
+# VISTA 3: FONDO DE AHORRO
 # ---------------------------------------------------------
 elif menu == "💎 Fondo de Ahorro":
     st.title("💎 Mi Fondo de Ahorro (Dinero Guardado)")
@@ -470,7 +532,12 @@ elif menu == "💎 Fondo de Ahorro":
                 monto_aporte = st.number_input("Monto a guardar ($ MXN):", min_value=0.0, value=float(ahorro_meta_sem), step=50.0)
                 origen_aporte = st.selectbox("¿De dónde sale el dinero?", ["Banco / Débito", "Efectivo"])
             with col_ap2:
-                motivo_aporte = st.text_input("Motivo / Etiqueta:", value="Ahorro semanal (Págate a ti primero)")
+                motivo_aporte = st.selectbox("Motivo / Etiqueta:", [
+                    "Ahorro semanal (Págate a ti primero)", 
+                    "Apartado Reinscripción Universidad", 
+                    "Fondo de Emergencia", 
+                    "Otro"
+                ])
                 
             if st.form_submit_button("💎 Confirmar y Guardar Dinero", use_container_width=True):
                 if monto_aporte > 0:
@@ -488,7 +555,7 @@ elif menu == "💎 Fondo de Ahorro":
                 monto_retiro = st.number_input("Monto a retirar ($ MXN):", min_value=0.0, max_value=float(max(0.0, fondo_ahorro_total)), step=50.0)
                 destino_retiro = st.selectbox("¿A dónde entra el dinero?", ["Banco / Débito", "Efectivo"])
             with col_ret2:
-                motivo_retiro = st.text_input("Motivo de la emergencia:", placeholder="Ej: Compra de medicamento, imprevisto moto")
+                motivo_retiro = st.text_input("Motivo del retiro:", placeholder="Ej: Pago de Reinscripción, medicina, imprevisto moto")
                 
             if st.form_submit_button("⚠️ Confirmar Retiro de Ahorro", use_container_width=True):
                 if 0 < monto_retiro <= fondo_ahorro_total:
@@ -516,15 +583,14 @@ elif menu == "💎 Fondo de Ahorro":
         )
 
 # ---------------------------------------------------------
-# VISTA 3: TABLA EDITABLE DIRECTA (VENCIMIENTOS Y FECHAS)
+# VISTA 4: VENCIMIENTOS Y EDICIÓN DIRECTA EN TABLA
 # ---------------------------------------------------------
 elif menu == "📅 Vencimientos y Fechas":
     st.title("📅 Calendario y Edición Directa de Fechas")
-    st.caption("✏️ Haz doble clic en cualquier celda para cambiar el día de corte, saldo o pago mínimo como en Excel, y presiona el botón verde:")
+    st.caption("✏️ Haz doble clic en cualquier celda para cambiar el día de pago (1-31), saldo o pago mínimo como en Excel, y presiona el botón verde:")
     
     df_deudas = get_deudas()
     
-    # Tabla editable directa
     tabla_editable = pd.DataFrame({
         "Cuenta": df_deudas['acreedor'],
         "Día de Pago (1-31)": df_deudas['dia_corte'].astype(int),
@@ -536,7 +602,7 @@ elif menu == "📅 Vencimientos y Fechas":
     cambios_df = st.data_editor(
         tabla_editable,
         column_config={
-            "Cuenta": st.column_config.TextColumn("Cuenta / Tarjeta", disabled=True),
+            "Cuenta": st.column_config.TextColumn("Cuenta / Entidad", disabled=True),
             "Día de Pago (1-31)": st.column_config.NumberColumn("Día de Pago (1-31)", min_value=1, max_value=31, step=1, help="Día del mes en que vence"),
             "Pago Mínimo ($)": st.column_config.NumberColumn("Pago Mínimo ($)", format="$%.2f", min_value=0.0, step=20.0),
             "Saldo Total ($)": st.column_config.NumberColumn("Saldo Total ($)", format="$%.2f", min_value=0.0, step=50.0),
@@ -575,151 +641,4 @@ elif menu == "📅 Vencimientos y Fechas":
         column_config={
             "Cuenta": "Entidad",
             "Día Límite": st.column_config.NumberColumn("Día de Pago", format="Día %d"),
-            "Faltan": st.column_config.NumberColumn("Días Restantes", format="%d días"),
-            "Pago Mínimo": st.column_config.NumberColumn("Mínimo a Pagar", format="$%.2f MXN"),
-            "Saldo Total": st.column_config.NumberColumn("Saldo Actual", format="$%.2f MXN")
-        },
-        use_container_width=True,
-        hide_index=True
-    )
-
-# ---------------------------------------------------------
-# VISTA 4: MI BILLETERA
-# ---------------------------------------------------------
-elif menu == "Mi Billetera":
-    st.title("👛 Estado de Liquidez Real (Mi Billetera)")
-    st.caption("Dinero disponible en tus cuentas y efectivo para gastos del día a día.")
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("🏦 Banco / Tarjeta Débito", f"${saldo_banco:,.2f} MXN")
-    with col2:
-        st.metric("💵 Dinero en Efectivo", f"${saldo_efectivo:,.2f} MXN")
-    with col3:
-        st.metric("💰 Dinero Físico Total", f"${(saldo_banco + saldo_efectivo):,.2f} MXN")
-
-    st.markdown("---")
-    st.subheader("✏️ Ajustar Saldos Actuales de Billetera")
-    with st.form("form_billetera"):
-        c1, c2 = st.columns(2)
-        with c1:
-            nb = st.number_input("Saldo en Banco ($):", min_value=0.0, value=float(saldo_banco), step=50.0)
-        with c2:
-            ne = st.number_input("Saldo en Efectivo ($):", min_value=0.0, value=float(saldo_efectivo), step=50.0)
-        if st.form_submit_button("Guardar Cambios de Billetera", use_container_width=True):
-            set_billetera(nb, ne)
-            st.success("¡Billetera actualizada!")
-            st.rerun()
-
-# ---------------------------------------------------------
-# VISTA 5: REGISTRO RÁPIDO
-# ---------------------------------------------------------
-elif menu == "Registro Rápido":
-    st.title("⚡ Registro Rápido de Movimientos")
-    st.caption("Cada gasto se descuenta automáticamente de tu Banco o Efectivo según el método elegido.")
-    
-    with st.form("form_reg", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            f_fecha = st.date_input("Fecha:", value=date.today())
-            f_concepto = st.text_input("Concepto:", placeholder="Ej: Monster, Tacos, Gasolina, Pago BBVA")
-            f_monto = st.number_input("Monto ($ MXN):", min_value=0.0, step=10.0)
-        with c2:
-            f_cat = st.selectbox("Categoría:", [
-                "Gasto Hormiga", "Comida / Salidas", "Transporte / Gasolina / Moto",
-                "Gimnasio", "Abono a Deuda", "Otros"
-            ])
-            f_tipo = st.selectbox("Tipo:", ["Variable", "Fijo", "Deuda"])
-            f_metodo = st.selectbox("¿De dónde salió el dinero?", ["Banco / Tarjeta Débito", "Efectivo", "Tarjeta de Crédito"])
-            
-        if st.form_submit_button("💾 Guardar y Descontar de Billetera", use_container_width=True):
-            if f_concepto.strip() and f_monto > 0:
-                add_movimiento(f_fecha, f_concepto, f_cat, f_tipo, f_monto, f_metodo)
-                st.success(f"✅ Registrado: {f_concepto} por ${f_monto:,.2f}. Saldo actualizado.")
-                st.rerun()
-            else:
-                st.error("Por favor completa concepto y monto.")
-
-# ---------------------------------------------------------
-# VISTA 6: ASESOR DE PAGOS
-# ---------------------------------------------------------
-elif menu == "Asesor de Pagos":
-    st.title("🎯 Asesor Inteligente: ¿Qué pagar primero esta semana?")
-    st.caption("Plan táctico semanal para liquidar deudas con tu dinero real sin quedarte sin comida ni bicicletear.")
-    
-    df_deudas = get_deudas()
-    
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("💰 Dinero Disponible Hoy", f"${(saldo_banco + saldo_efectivo):,.2f} MXN")
-    with c2:
-        st.metric("🛡️ Reserva de Comida/Gasolina", f"${reserva_esencial:,.2f} MXN")
-    with c3:
-        disponible_abonos = max(0.0, (saldo_banco + saldo_efectivo) - reserva_esencial)
-        st.metric("⚔️ Dinero Real para Deudas", f"${disponible_abonos:,.2f} MXN")
-
-    st.markdown("---")
-    metodo = st.radio("Estrategia de Ataque:", ["🎯 Bola de Nieve (Liquidar primero la cuenta más chica)", "🔥 Avalancha (Ahorrar en intereses)"])
-    
-    if "Bola de Nieve" in metodo:
-        df_ord = df_deudas.sort_values(by="saldo", ascending=True).copy()
-        criterio = "menor saldo actual para eliminarla rápido y tacharla de tu lista"
-    else:
-        df_ord = df_deudas.sort_values(by="tasa_cat", ascending=False).copy()
-        criterio = "mayor tasa de interés/CAT para evitar cobros sobrecargados"
-        
-    target = df_ord.iloc[0]
-    
-    st.info(f"""
-    ### 🥊 Plan de Acción Inmediato:
-    1. **Protege tus ${reserva_esencial:,.2f} MXN:** Déjalos apartados para tus comidas y transporte de la semana. **No los toques para tarjetas.**
-    2. **Cubre los mínimos indispensables:** Paga el mínimo de todas las tarjetas para evitar comisiones por mora o intereses moratorios (incluyendo tus MSI de Mercado Pago).
-    3. **FOCO DE ATAQUE PRINCIPAL: `{target['acreedor'].upper()}`**
-       * Saldo: **${target['saldo']:,.2f} MXN** | Pago mínimo: **${target['pago_minimo']:,.2f} MXN**
-       * Motivo: Es tu cuenta con {criterio}.
-       * Todo dinero extra de tu sueldo semanal debe abonarse directo a capital de **{target['acreedor']}**.
-    4. **Freno total al bicicleteo:** Si una semana no completas para liquidar una tarjeta, paga únicamente el mínimo de tu propio dinero. **No saques dinero de otra para pagar.**
-    """)
-
-# ---------------------------------------------------------
-# VISTA 7: DEUDAS Y RESPALDO EXCEL/CSV
-# ---------------------------------------------------------
-elif menu == "Deudas":
-    st.title("💳 Administrar Saldos y Fechas de Deudas")
-    st.caption("Actualiza aquí las fechas y saldos de cada cuenta o descarga tu respaldo:")
-    
-    df_deudas = get_deudas()
-    c_sel = st.selectbox("Selecciona la cuenta que quieres modificar:", df_deudas['acreedor'])
-    fila_d = df_deudas[df_deudas['acreedor'] == c_sel].iloc[0]
-    
-    dia_val = int(fila_d.get('dia_corte', 15))
-    saldo_val = float(fila_d.get('saldo', 0.0))
-    pago_min_val = float(fila_d.get('pago_minimo', 0.0))
-    cat_val = float(fila_d.get('tasa_cat', 0.0))
-    
-    with st.form("form_edit_deuda"):
-        c1, c2 = st.columns(2)
-        with c1:
-            ns = st.number_input("Saldo Total Actual ($):", value=saldo_val, step=50.0)
-            nm = st.number_input("Pago Mínimo ($):", value=pago_min_val, step=20.0)
-        with c2:
-            nc = st.number_input("Tasa CAT (%):", value=cat_val, step=1.0)
-            nd = st.number_input("Día de Pago Límite del Mes (1-31):", min_value=1, max_value=31, value=dia_val)
-        if st.form_submit_button("Guardar Cambios de la Cuenta", use_container_width=True):
-            conn = get_db()
-            conn.execute("UPDATE deudas SET saldo=?, pago_minimo=?, tasa_cat=?, dia_corte=? WHERE id=?", (ns, nm, nc, nd, int(fila_d['id'])))
-            conn.commit()
-            conn.close()
-            st.success(f"¡{c_sel} actualizada correctamente!")
-            st.rerun()
-
-    st.markdown("---")
-    st.subheader("📥 Respaldo de Seguridad")
-    csv_deudas = df_deudas.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Descargar Respaldo de Mis Deudas en Excel/CSV",
-        data=csv_deudas,
-        file_name=f"deudas_{date.today()}.csv",
-        mime="text/csv",
-        use_container_width=True
-    )
+            "Faltan": st.column_config.NumberColumn("
