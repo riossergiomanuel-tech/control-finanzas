@@ -101,16 +101,6 @@ def init_db():
     c = conn.cursor()
     c.execute("CREATE TABLE IF NOT EXISTS configuracion (clave TEXT PRIMARY KEY, valor REAL)")
     c.execute("CREATE TABLE IF NOT EXISTS billetera (metodo TEXT PRIMARY KEY, saldo REAL)")
-    c.execute("""CREATE TABLE IF NOT EXISTS deudas (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, 
-        acreedor TEXT UNIQUE, 
-        saldo REAL, 
-        pago_minimo REAL, 
-        tasa_cat REAL, 
-        dia_corte INTEGER, 
-        tipo_cuenta TEXT,
-        activa INTEGER DEFAULT 1)
-    """)
     c.execute("""CREATE TABLE IF NOT EXISTS movimientos (
         id INTEGER PRIMARY KEY AUTOINCREMENT, 
         fecha TEXT, 
@@ -129,14 +119,21 @@ def init_db():
         motivo TEXT)
     """)
     
-    # Migración de columnas
+    # Auto-reparación y migración de esquema si existía con formato viejo
     cols_d = [r[1] for r in c.execute("PRAGMA table_info(deudas)").fetchall()]
-    if "fecha_corte" in cols_d and "dia_corte" not in cols_d:
-        try: c.execute("ALTER TABLE deudas ADD COLUMN dia_corte INTEGER DEFAULT 15")
-        except: pass
-    if "tipo_cuenta" not in cols_d:
-        try: c.execute("ALTER TABLE deudas ADD COLUMN tipo_cuenta TEXT DEFAULT 'Tarjeta Crédito'")
-        except: pass
+    if cols_d and ("dia_corte" not in cols_d or "tipo_cuenta" not in cols_d):
+        c.execute("DROP TABLE deudas")
+        
+    c.execute("""CREATE TABLE IF NOT EXISTS deudas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, 
+        acreedor TEXT UNIQUE, 
+        saldo REAL, 
+        pago_minimo REAL, 
+        tasa_cat REAL, 
+        dia_corte INTEGER, 
+        tipo_cuenta TEXT,
+        activa INTEGER DEFAULT 1)
+    """)
 
     defaults = [
         ('ingreso_base', 3200.0),
@@ -155,7 +152,7 @@ def init_db():
     c.execute("INSERT OR IGNORE INTO billetera VALUES ('Banco', 2200.0)")
     c.execute("INSERT OR IGNORE INTO billetera VALUES ('Efectivo', 800.0)")
     
-    # Insertar siempre las cuentas si faltan (incluyendo Universidad)
+    # Todas las cuentas reales garantizadas
     cuentas_requeridas = [
         ("Universidad (Mensualidad)", 2700.0, 2700.0, 0.0, 5, "Educación / Fijo"),
         ("Universidad (Reinscripción)", 2000.0, 500.0, 0.0, 1, "Educación / Cuatrimestre"),
@@ -249,13 +246,6 @@ def get_deudas():
     conn = get_db()
     df = pd.read_sql_query("SELECT * FROM deudas WHERE activa=1", conn)
     conn.close()
-    if "dia_corte" not in df.columns:
-        if "fecha_corte" in df.columns:
-            df["dia_corte"] = pd.to_numeric(df["fecha_corte"].astype(str).str.extract(r"(\d+)")[0], errors="coerce").fillna(15).astype(int)
-        else:
-            df["dia_corte"] = 15
-    if "tipo_cuenta" not in df.columns:
-        df["tipo_cuenta"] = "Tarjeta Crédito"
     return df
 
 def save_edited_deudas(edited_df):
@@ -290,7 +280,7 @@ def add_movimiento(f, c, cat, t, m, met):
     update_billetera_delta(met, m, "restar")
 
 # ---------------------------------------------------------
-# BARRA LATERAL (SUELDO VARIABLE Y GASTOS EDUCATIVOS)
+# BARRA LATERAL (SUELDO VARIABLE Y UNIVERSIDAD)
 # ---------------------------------------------------------
 cfg = get_cfg()
 ingreso_base = cfg.get("ingreso_base", 3200.0)
@@ -301,10 +291,8 @@ reserva_esencial = cfg.get("gasto_esencial_semanal", 1000.0)
 presupuesto_hormiga = cfg.get("presupuesto_hormiga_semanal", 400.0)
 fondo_ahorro_total = cfg.get("fondo_ahorro_acumulado", 320.0)
 
-# Gastos de Universidad:
 uni_mensual = cfg.get("uni_mensual", 2700.0)
 uni_cuatri = cfg.get("uni_cuatrimestral", 2000.0)
-# Reserva semanal necesaria: $675 mensual + ~$154 cuatrimestral
 reserva_uni_semanal = (uni_mensual / 4.0) + (uni_cuatri / 13.0)
 
 ingreso_neto_semana = max(0.0, ingreso_base + horas_extras - descuentos)
@@ -346,7 +334,7 @@ with st.sidebar:
         index=0
     )
     st.markdown("---")
-    st.caption(f"🏦 Banco: ${saldo_banco:,.2f} \vert{} 💵 Efectivo: ${saldo_efectivo:,.2f}")
+    st.caption(f"🏦 Banco: ${saldo_banco:,.2f} | 💵 Efectivo: ${saldo_efectivo:,.2f}")
     st.caption(f"🎓 Reserva Uni Semanal: ${reserva_uni_semanal:,.2f}")
     st.caption(f"💎 Fondo Guardado: ${fondo_ahorro_total:,.2f}")
 
@@ -360,7 +348,6 @@ if menu == "Dashboard":
     df_movs = get_movimientos()
     hoy = date.today()
     
-    # Separar créditos bancarios/fintechs de gastos de estudio
     df_creditos = df_deudas[~df_deudas['acreedor'].str.contains("Universidad")].copy()
     total_deuda_creditos = df_creditos['saldo'].sum()
     minimos_creditos_mes = df_creditos['pago_minimo'].sum()
@@ -378,7 +365,6 @@ if menu == "Dashboard":
         gastos_variables = movs_7[movs_7['tipo'] == 'Variable']['monto'].sum()
         gastos_hormiga = movs_7[movs_7['categoria'] == 'Gasto Hormiga']['monto'].sum()
         
-    # Dinero libre protegiendo Universidad ($828.85/sem), Ahorro, Comida y Mínimos:
     dinero_libre = max(0.0, ingreso_neto_semana - ahorro_meta - reserva_uni_semanal - minimos_creditos_sem - reserva_esencial - gastos_variables)
 
     # 4 TARJETAS KPI
@@ -396,7 +382,6 @@ if menu == "Dashboard":
     with c4:
         st.metric(label="🚨 Deuda Tarjetas/Préstamos", value=f"${total_deuda_creditos:,.2f}", delta=f"${minimos_creditos_mes:,.2f} mínimos/mes", delta_color="inverse")
 
-    # ALERTA DE UNIVERSIDAD (PROTEGIDA)
     st.markdown(f"""
     <div class="uni-card">
         🎓 <b>Apartado Universitario Protegido de Esta Semana: ${reserva_uni_semanal:,.2f} MXN</b><br>
@@ -406,7 +391,6 @@ if menu == "Dashboard":
     </div>
     """, unsafe_allow_html=True)
 
-    # ALERTA DE VENCIMIENTOS SEMANALES
     proximos_7_dias = [(hoy + timedelta(days=i)).day for i in range(8)]
     vencimientos_semana = []
     total_minimos_semana = 0.0
@@ -425,7 +409,6 @@ if menu == "Dashboard":
         </div>
         """, unsafe_allow_html=True)
 
-    # PROYECCIÓN DE LIBERTAD FINANCIERA
     pago_semanal_estimado = max(200.0, minimos_creditos_sem + dinero_libre * 0.5)
     semanas_libertad = int(total_deuda_creditos / pago_semanal_estimado) if pago_semanal_estimado > 0 else 52
     fecha_libertad = hoy + timedelta(weeks=semanas_libertad)
@@ -453,7 +436,7 @@ if menu == "Dashboard":
         elif gastos_hormiga < presupuesto_hormiga:
             estado_semaforo = f"🟡 <b>Semáforo Amarillo:</b> Precaución. Has gastado ${gastos_hormiga:,.2f} de ${presupuesto_hormiga:,.2f}. Te quedan solo <b>${(presupuesto_hormiga - gastos_hormiga):,.2f}</b>."
         else:
-            estado_semaforo = f"🔴 <b>Semáforo Rojo:</b> ¡Tope alcanzado! Has gastado ${gastos_hormiga:,.2f} de${presupuesto_hormiga:,.2f}. Detén los antojos hasta el siguiente cobro."
+            estado_semaforo = f"🔴 <b>Semáforo Rojo:</b> ¡Tope alcanzado! Has gastado ${gastos_hormiga:,.2f} de ${presupuesto_hormiga:,.2f}. Detén los antojos hasta el siguiente cobro."
 
         st.markdown(f"""
         <div class="hormiga-card">
@@ -492,12 +475,6 @@ elif menu == "🎓 Universidad":
             set_cfg("uni_cuatrimestral", n_cuat)
             st.success("¡Costos actualizados correctamente!")
             st.rerun()
-
-    st.info("""
-    💡 **Estrategia para no sufrir a fin de cuatrimestre:**
-    En lugar de juntar los $2,000 de golpe la semana de reinscripción, el sistema ya te resta **$154 pesos de tu sueldo cada semana**. 
-    Guárdalos en tu **Fondo de Ahorro** bajo la etiqueta "Apartado Reinscripción Universidad". Cuando llegue el día de pago, ya tendrás los $2,000 listos sin pedir prestado ni tocar crédito.
-    """)
 
 # ---------------------------------------------------------
 # VISTA 3: FONDO DE AHORRO
@@ -555,7 +532,7 @@ elif menu == "💎 Fondo de Ahorro":
                 monto_retiro = st.number_input("Monto a retirar ($ MXN):", min_value=0.0, max_value=float(max(0.0, fondo_ahorro_total)), step=50.0)
                 destino_retiro = st.selectbox("¿A dónde entra el dinero?", ["Banco / Débito", "Efectivo"])
             with col_ret2:
-                motivo_retiro = st.text_input("Motivo del retiro:", placeholder="Ej: Pago de Reinscripción, medicina, imprevisto moto")
+                motivo_retiro = st.text_input("Motivo de la emergencia:", placeholder="Ej: Pago de Reinscripción, medicina, imprevisto moto")
                 
             if st.form_submit_button("⚠️ Confirmar Retiro de Ahorro", use_container_width=True):
                 if 0 < monto_retiro <= fondo_ahorro_total:
@@ -641,4 +618,152 @@ elif menu == "📅 Vencimientos y Fechas":
         column_config={
             "Cuenta": "Entidad",
             "Día Límite": st.column_config.NumberColumn("Día de Pago", format="Día %d"),
-            "Faltan": st.column_config.NumberColumn("
+            "Faltan": st.column_config.NumberColumn("Días Restantes", format="%d días"),
+            "Pago Mínimo": st.column_config.NumberColumn("Mínimo a Pagar", format="$%.2f MXN"),
+            "Saldo Total": st.column_config.NumberColumn("Saldo Actual", format="$%.2f MXN")
+        },
+        use_container_width=True,
+        hide_index=True
+    )
+
+# ---------------------------------------------------------
+# VISTA 5: MI BILLETERA
+# ---------------------------------------------------------
+elif menu == "Mi Billetera":
+    st.title("👛 Estado de Liquidez Real (Mi Billetera)")
+    st.caption("Dinero disponible en tus cuentas y efectivo para gastos del día a día.")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("🏦 Banco / Tarjeta Débito", f"${saldo_banco:,.2f} MXN")
+    with col2:
+        st.metric("💵 Dinero en Efectivo", f"${saldo_efectivo:,.2f} MXN")
+    with col3:
+        st.metric("💰 Dinero Físico Total", f"${(saldo_banco + saldo_efectivo):,.2f} MXN")
+
+    st.markdown("---")
+    st.subheader("✏️ Ajustar Saldos Actuales de Billetera")
+    with st.form("form_billetera"):
+        c1, c2 = st.columns(2)
+        with c1:
+            nb = st.number_input("Saldo en Banco ($):", min_value=0.0, value=float(saldo_banco), step=50.0)
+        with c2:
+            ne = st.number_input("Saldo en Efectivo ($):", min_value=0.0, value=float(saldo_efectivo), step=50.0)
+        if st.form_submit_button("Guardar Cambios de Billetera", use_container_width=True):
+            set_billetera(nb, ne)
+            st.success("¡Billetera actualizada!")
+            st.rerun()
+
+# ---------------------------------------------------------
+# VISTA 6: REGISTRO RÁPIDO
+# ---------------------------------------------------------
+elif menu == "Registro Rápido":
+    st.title("⚡ Registro Rápido de Movimientos")
+    st.caption("Cada gasto se descuenta automáticamente de tu Banco o Efectivo según el método elegido.")
+    
+    with st.form("form_reg", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            f_fecha = st.date_input("Fecha:", value=date.today())
+            f_concepto = st.text_input("Concepto:", placeholder="Ej: Monster, Tacos, Gasolina, Pago BBVA, Mensualidad Uni")
+            f_monto = st.number_input("Monto ($ MXN):", min_value=0.0, step=10.0)
+        with c2:
+            f_cat = st.selectbox("Categoría:", [
+                "Gasto Hormiga", "Comida / Salidas", "Transporte / Gasolina / Moto",
+                "Educación / Universidad", "Gimnasio", "Abono a Deuda", "Otros"
+            ])
+            f_tipo = st.selectbox("Tipo:", ["Variable", "Fijo", "Deuda"])
+            f_metodo = st.selectbox("¿De dónde salió el dinero?", ["Banco / Tarjeta Débito", "Efectivo", "Tarjeta de Crédito"])
+            
+        if st.form_submit_button("💾 Guardar y Descontar de Billetera", use_container_width=True):
+            if f_concepto.strip() and f_monto > 0:
+                add_movimiento(f_fecha, f_concepto, f_cat, f_tipo, f_monto, f_metodo)
+                st.success(f"✅ Registrado: {f_concepto} por ${f_monto:,.2f}. Saldo actualizado.")
+                st.rerun()
+            else:
+                st.error("Por favor completa concepto y monto.")
+
+# ---------------------------------------------------------
+# VISTA 7: ASESOR DE PAGOS
+# ---------------------------------------------------------
+elif menu == "Asesor de Pagos":
+    st.title("🎯 Asesor Inteligente: ¿Qué pagar primero esta semana?")
+    st.caption("Plan táctico semanal para liquidar deudas con tu dinero real sin quedarte sin comida ni bicicletear.")
+    
+    df_deudas = get_deudas()
+    df_cred = df_deudas[~df_deudas['acreedor'].str.contains("Universidad")].copy()
+    
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("💰 Dinero Disponible Hoy", f"${(saldo_banco + saldo_efectivo):,.2f} MXN")
+    with c2:
+        st.metric("🛡️ Reserva de Comida y Uni", f"${(reserva_esencial + reserva_uni_semanal):,.2f} MXN")
+    with c3:
+        disponible_abonos = max(0.0, (saldo_banco + saldo_efectivo) - (reserva_esencial + reserva_uni_semanal))
+        st.metric("⚔️ Dinero Real para Tarjetas", f"${disponible_abonos:,.2f} MXN")
+
+    st.markdown("---")
+    metodo = st.radio("Estrategia de Ataque:", ["🎯 Bola de Nieve (Liquidar primero la cuenta más chica)", "🔥 Avalancha (Ahorrar en intereses)"])
+    
+    if "Bola de Nieve" in metodo:
+        df_ord = df_cred.sort_values(by="saldo", ascending=True).copy()
+        criterio = "menor saldo actual para eliminarla rápido y tacharla de tu lista"
+    else:
+        df_ord = df_cred.sort_values(by="tasa_cat", ascending=False).copy()
+        criterio = "mayor tasa de interés/CAT para evitar cobros sobrecargados"
+        
+    target = df_ord.iloc[0]
+    
+    st.info(f"""
+    ### 🥊 Plan de Acción Inmediato:
+    1. **🎓 Prioridad Absoluta - Universidad:** Separa **${reserva_uni_semanal:,.2f} MXN** ($675 de mensualidad + $154 de reinscripción) y **${reserva_esencial:,.2f} MXN** de comida/gasolina. **Estos fondos no se tocan para tarjetas.**
+    2. **Cubre los mínimos indispensables:** Paga el mínimo de todas las tarjetas para evitar comisiones por mora o intereses moratorios (incluyendo tus MSI de Mercado Pago).
+    3. **FOCO DE ATAQUE PRINCIPAL: `{target['acreedor'].upper()}`**
+       * Saldo: **${target['saldo']:,.2f} MXN** | Pago mínimo: **${target['pago_minimo']:,.2f} MXN**
+       * Motivo: Es tu cuenta con {criterio}.
+       * Todo dinero extra de tu sueldo semanal debe abonarse directo a capital de **{target['acreedor']}**.
+    4. **Freno total al bicicleteo:** Si una semana no completas para liquidar una tarjeta, paga únicamente el mínimo de tu propio dinero. **No saques dinero de otra para pagar.**
+    """)
+
+# ---------------------------------------------------------
+# VISTA 8: DEUDAS Y RESPALDO EXCEL/CSV
+# ---------------------------------------------------------
+elif menu == "Deudas":
+    st.title("💳 Administrar Saldos y Fechas de Deudas")
+    st.caption("Configura aquí las fechas y saldos de cada cuenta o descarga tu respaldo:")
+    
+    df_deudas = get_deudas()
+    c_sel = st.selectbox("Selecciona la cuenta que quieres modificar:", df_deudas['acreedor'])
+    fila_d = df_deudas[df_deudas['acreedor'] == c_sel].iloc[0]
+    
+    dia_val = int(fila_d.get('dia_corte', 15))
+    saldo_val = float(fila_d.get('saldo', 0.0))
+    pago_min_val = float(fila_d.get('pago_minimo', 0.0))
+    cat_val = float(fila_d.get('tasa_cat', 0.0))
+    
+    with st.form("form_edit_deuda"):
+        c1, c2 = st.columns(2)
+        with c1:
+            ns = st.number_input("Saldo Total Actual ($):", value=saldo_val, step=50.0)
+            nm = st.number_input("Pago Mínimo ($):", value=pago_min_val, step=20.0)
+        with c2:
+            nc = st.number_input("Tasa CAT (%):", value=cat_val, step=1.0)
+            nd = st.number_input("Día de Pago Límite del Mes (1-31):", min_value=1, max_value=31, value=dia_val)
+        if st.form_submit_button("Guardar Cambios de la Cuenta", use_container_width=True):
+            conn = get_db()
+            conn.execute("UPDATE deudas SET saldo=?, pago_minimo=?, tasa_cat=?, dia_corte=? WHERE id=?", (ns, nm, nc, nd, int(fila_d['id'])))
+            conn.commit()
+            conn.close()
+            st.success(f"¡{c_sel} actualizada correctamente!")
+            st.rerun()
+
+    st.markdown("---")
+    st.subheader("📥 Respaldo de Seguridad")
+    csv_deudas = df_deudas.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="📥 Descargar Respaldo de Mis Deudas en Excel/CSV",
+        data=csv_deudas,
+        file_name=f"deudas_{date.today()}.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
