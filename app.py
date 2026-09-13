@@ -737,6 +737,5 @@ elif menu == "🔒 Seguridad":
                 st.rerun()
             else:
                 st.error("El PIN debe tener exactamente 4 números.")
-EOF}
 
 http://googleusercontent.com/action_card_content/d116b7d0-3c6b-4b38-bf1f-59e247b9b043
