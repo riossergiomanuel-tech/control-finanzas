@@ -15,7 +15,7 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# ESTILO VISUAL MODERNO (Modo Oscuro Fintech)
+# ESTILO VISUAL FINTECH
 # ---------------------------------------------------------
 st.markdown("""
 <style>
@@ -96,6 +96,20 @@ def init_db():
         monto REAL, 
         metodo_pago TEXT)
     """)
+    
+    # Migración automática si ya existía la tabla con fecha_corte
+    cols = [r[1] for r in c.execute("PRAGMA table_info(deudas)").fetchall()]
+    if "fecha_corte" in cols and "dia_corte" not in cols:
+        try:
+            c.execute("ALTER TABLE deudas ADD COLUMN dia_corte INTEGER DEFAULT 15")
+        except:
+            pass
+    if "tipo_cuenta" not in cols:
+        try:
+            c.execute("ALTER TABLE deudas ADD COLUMN tipo_cuenta TEXT DEFAULT 'Tarjeta Crédito'")
+        except:
+            pass
+            
     c.execute("INSERT OR IGNORE INTO configuracion VALUES ('ingreso_semanal', 3200.0)")
     c.execute("INSERT OR IGNORE INTO configuracion VALUES ('porcentaje_ahorro', 10.0)")
     c.execute("INSERT OR IGNORE INTO configuracion VALUES ('gasto_esencial_semanal', 1000.0)")
@@ -114,7 +128,10 @@ def init_db():
             ("Vexi", 2500.0, 350.0, 78.0, 28, "Tarjeta Crédito"),
             ("Stori", 1477.17, 250.0, 99.0, 22, "Tarjeta Crédito")
         ]
-        c.executemany("INSERT INTO deudas (acreedor, saldo, pago_minimo, tasa_cat, dia_corte, tipo_cuenta) VALUES (?,?,?,?,?,?)", deudas)
+        try:
+            c.executemany("INSERT INTO deudas (acreedor, saldo, pago_minimo, tasa_cat, dia_corte, tipo_cuenta) VALUES (?,?,?,?,?,?)", deudas)
+        except:
+            pass
 
     conn.commit()
     conn.close()
@@ -159,11 +176,25 @@ def get_deudas():
     conn = get_db()
     df = pd.read_sql_query("SELECT * FROM deudas WHERE activa=1", conn)
     conn.close()
+    
+    # Compatibilidad segura:
+    if "dia_corte" not in df.columns:
+        if "fecha_corte" in df.columns:
+            df["dia_corte"] = pd.to_numeric(df["fecha_corte"].astype(str).str.extract(r"(\d+)")[0], errors="coerce").fillna(15).astype(int)
+        else:
+            df["dia_corte"] = 15
+    if "tipo_cuenta" not in df.columns:
+        df["tipo_cuenta"] = "Tarjeta Crédito"
+        
     return df
 
 def update_deuda_val(did, saldo, pago_min, cat, dia):
     conn = get_db()
-    conn.execute("UPDATE deudas SET saldo=?, pago_minimo=?, tasa_cat=?, dia_corte=? WHERE id=?", (saldo, pago_min, cat, dia, did))
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(deudas)").fetchall()]
+    if "dia_corte" in cols:
+        conn.execute("UPDATE deudas SET saldo=?, pago_minimo=?, tasa_cat=?, dia_corte=? WHERE id=?", (saldo, pago_min, cat, int(dia), did))
+    elif "fecha_corte" in cols:
+        conn.execute("UPDATE deudas SET saldo=?, pago_minimo=?, tasa_cat=?, fecha_corte=? WHERE id=?", (saldo, pago_min, cat, str(dia), did))
     conn.commit()
     conn.close()
 
@@ -396,14 +427,20 @@ elif menu == "Deudas":
     c_sel = st.selectbox("Selecciona la cuenta:", df_deudas['acreedor'])
     fila_d = df_deudas[df_deudas['acreedor'] == c_sel].iloc[0]
     
+    # Extracción segura sin KeyError
+    dia_val = int(fila_d.get('dia_corte', 15))
+    saldo_val = float(fila_d.get('saldo', 0.0))
+    pago_min_val = float(fila_d.get('pago_minimo', 0.0))
+    cat_val = float(fila_d.get('tasa_cat', 0.0))
+    
     with st.form("form_edit_deuda"):
         c1, c2 = st.columns(2)
         with c1:
-            ns = st.number_input("Saldo Total Actual ($):", value=float(fila_d['saldo']), step=50.0)
-            nm = st.number_input("Pago Mínimo ($):", value=float(fila_d['pago_minimo']), step=20.0)
+            ns = st.number_input("Saldo Total Actual ($):", value=saldo_val, step=50.0)
+            nm = st.number_input("Pago Mínimo ($):", value=pago_min_val, step=20.0)
         with c2:
-            nc = st.number_input("Tasa CAT (%):", value=float(fila_d['tasa_cat']), step=1.0)
-            nd = st.number_input("Día de Pago (1-31):", min_value=1, max_value=31, value=int(fila_d['dia_corte']))
+            nc = st.number_input("Tasa CAT (%):", value=cat_val, step=1.0)
+            nd = st.number_input("Día de Pago (1-31):", min_value=1, max_value=31, value=dia_val)
         if st.form_submit_button("Guardar Cambios de la Cuenta", use_container_width=True):
             update_deuda_val(int(fila_d['id']), ns, nm, nc, nd)
             st.success(f"¡{c_sel} actualizada!")
