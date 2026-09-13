@@ -121,7 +121,7 @@ def init_db():
         motivo TEXT)
     """)
     
-    # Migración de columnas
+    # Migración segura
     cols_d = [r[1] for r in c.execute("PRAGMA table_info(deudas)").fetchall()]
     if "fecha_corte" in cols_d and "dia_corte" not in cols_d:
         try: c.execute("ALTER TABLE deudas ADD COLUMN dia_corte INTEGER DEFAULT 15")
@@ -246,13 +246,20 @@ def get_deudas():
         df["tipo_cuenta"] = "Tarjeta Crédito"
     return df
 
-def update_deuda_val(did, saldo, pago_min, cat, dia):
+def save_edited_deudas(edited_df):
     conn = get_db()
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(deudas)").fetchall()]
-    if "dia_corte" in cols:
-        conn.execute("UPDATE deudas SET saldo=?, pago_minimo=?, tasa_cat=?, dia_corte=? WHERE id=?", (saldo, pago_min, cat, int(dia), did))
-    elif "fecha_corte" in cols:
-        conn.execute("UPDATE deudas SET saldo=?, pago_minimo=?, tasa_cat=?, fecha_corte=? WHERE id=?", (saldo, pago_min, cat, str(dia), did))
+    for _, row in edited_df.iterrows():
+        conn.execute("""
+            UPDATE deudas 
+            SET saldo = ?, pago_minimo = ?, dia_corte = ?, tasa_cat = ?
+            WHERE acreedor = ?
+        """, (
+            float(row['Saldo Total ($)']),
+            float(row['Pago Mínimo ($)']),
+            int(row['Día de Pago (1-31)']),
+            float(row.get('CAT (%)', 50.0)),
+            row['Cuenta']
+        ))
     conn.commit()
     conn.close()
 
@@ -317,7 +324,7 @@ with st.sidebar:
     st.markdown("---")
     menu = st.radio(
         "Navegación:",
-        ["Dashboard", "💎 Fondo de Ahorro", "📅 Vencimientos Semanales", "Mi Billetera", "Registro Rápido", "Asesor de Pagos", "Deudas"],
+        ["Dashboard", "💎 Fondo de Ahorro", "📅 Vencimientos y Fechas", "Mi Billetera", "Registro Rápido", "Asesor de Pagos", "Deudas"],
         index=0
     )
     st.markdown("---")
@@ -405,7 +412,6 @@ if menu == "Dashboard":
     </div>
     """, unsafe_allow_html=True)
 
-    # GRÁFICOS Y SEMÁFORO DE GASTOS HORMIGA
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         st.subheader("📊 Distribución de tus Deudas por Entidad")
@@ -427,8 +433,7 @@ if menu == "Dashboard":
             {estado_semaforo}<br><br>
             • <b>Gasto hormiga últimos 7 días:</b> ${gastos_hormiga:,.2f} MXN<br>
             • <b>Proyección mensual:</b> ${(gastos_hormiga * 4.33):,.2f} MXN<br>
-            • <b>Proyección anual:</b> ${(gastos_hormiga * 52):,.2f} MXN<br><br>
-            <i>💡 Si reduces a la mitad este gasto, liberas dinero suficiente para liquidar Stori o DiDi por completo en un mes.</i>
+            • <b>Proyección anual:</b> ${(gastos_hormiga * 52):,.2f} MXN
         </div>
         """, unsafe_allow_html=True)
 
@@ -511,46 +516,68 @@ elif menu == "💎 Fondo de Ahorro":
         )
 
 # ---------------------------------------------------------
-# VISTA 3: VENCIMIENTOS SEMANALES
+# VISTA 3: TABLA EDITABLE DIRECTA (VENCIMIENTOS Y FECHAS)
 # ---------------------------------------------------------
-elif menu == "📅 Vencimientos Semanales":
-    st.title("📅 Calendario y Recordatorio de Pagos")
-    st.caption("Fechas exactas de pago de tus 8 cuentas para programar tu sueldo semanal:")
+elif menu == "📅 Vencimientos y Fechas":
+    st.title("📅 Calendario y Edición Directa de Fechas")
+    st.caption("✏️ Haz doble clic en cualquier celda para cambiar el día de corte, saldo o pago mínimo como en Excel, y presiona el botón verde:")
     
     df_deudas = get_deudas()
+    
+    # Tabla editable directa
+    tabla_editable = pd.DataFrame({
+        "Cuenta": df_deudas['acreedor'],
+        "Día de Pago (1-31)": df_deudas['dia_corte'].astype(int),
+        "Pago Mínimo ($)": df_deudas['pago_minimo'].astype(float),
+        "Saldo Total ($)": df_deudas['saldo'].astype(float),
+        "CAT (%)": df_deudas['tasa_cat'].astype(float)
+    })
+    
+    cambios_df = st.data_editor(
+        tabla_editable,
+        column_config={
+            "Cuenta": st.column_config.TextColumn("Cuenta / Tarjeta", disabled=True),
+            "Día de Pago (1-31)": st.column_config.NumberColumn("Día de Pago (1-31)", min_value=1, max_value=31, step=1, help="Día del mes en que vence"),
+            "Pago Mínimo ($)": st.column_config.NumberColumn("Pago Mínimo ($)", format="$%.2f", min_value=0.0, step=20.0),
+            "Saldo Total ($)": st.column_config.NumberColumn("Saldo Total ($)", format="$%.2f", min_value=0.0, step=50.0),
+            "CAT (%)": st.column_config.NumberColumn("Tasa CAT (%)", min_value=0.0, step=1.0)
+        },
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    if st.button("💾 Guardar Todas las Fechas y Montos Modificados", use_container_width=True):
+        save_edited_deudas(cambios_df)
+        st.success("✅ ¡Todas las fechas, saldos y pagos mínimos se guardaron exitosamente en tu base de datos!")
+        st.rerun()
+
+    st.markdown("---")
+    st.subheader("📆 Recordatorio de Pagos Ordenados por Urgencia:")
     hoy = date.today()
     dia_actual = hoy.day
-    
-    st.write(f"📆 **Hoy es:** {hoy.strftime('%d/%m/%Y')} (Día {dia_actual} del mes)")
+    st.write(f"Hoy es **{hoy.strftime('%d/%m/%Y')}** (Día {dia_actual} del mes)")
     
     pagos_lista = []
     for _, r in df_deudas.iterrows():
         dia_pago = int(r.get('dia_corte', 15))
-        if dia_pago >= dia_actual:
-            dias_para_pago = dia_pago - dia_actual
-        else:
-            dias_para_pago = (30 - dia_actual) + dia_pago
-            
+        dias_para_pago = dia_pago - dia_actual if dia_pago >= dia_actual else (30 - dia_actual) + dia_pago
         pagos_lista.append({
             "Cuenta": r['acreedor'],
-            "Pago Mínimo": r['pago_minimo'],
-            "Saldo Total": r['saldo'],
             "Día Límite": dia_pago,
             "Faltan": dias_para_pago,
-            "Tipo": r['tipo_cuenta']
+            "Pago Mínimo": r['pago_minimo'],
+            "Saldo Total": r['saldo']
         })
         
-    df_venc = pd.DataFrame(pagos_lista).sort_values(by="Faltan", ascending=True)
-    
+    df_urg = pd.DataFrame(pagos_lista).sort_values(by="Faltan", ascending=True)
     st.dataframe(
-        df_venc,
+        df_urg,
         column_config={
             "Cuenta": "Entidad",
-            "Pago Mínimo": st.column_config.NumberColumn("Mínimo a Pagar", format="$%.2f MXN"),
-            "Saldo Total": st.column_config.NumberColumn("Saldo Total", format="$%.2f MXN"),
-            "Día Límite": st.column_config.NumberColumn("Día Límite", format="Día %d"),
+            "Día Límite": st.column_config.NumberColumn("Día de Pago", format="Día %d"),
             "Faltan": st.column_config.NumberColumn("Días Restantes", format="%d días"),
-            "Tipo": "Tipo de Cuenta"
+            "Pago Mínimo": st.column_config.NumberColumn("Mínimo a Pagar", format="$%.2f MXN"),
+            "Saldo Total": st.column_config.NumberColumn("Saldo Actual", format="$%.2f MXN")
         },
         use_container_width=True,
         hide_index=True
@@ -659,7 +686,7 @@ elif menu == "Asesor de Pagos":
 # ---------------------------------------------------------
 elif menu == "Deudas":
     st.title("💳 Administrar Saldos y Fechas de Deudas")
-    st.caption("Configura aquí las fechas de pago exactas y actualiza los saldos:")
+    st.caption("Actualiza aquí las fechas y saldos de cada cuenta o descarga tu respaldo:")
     
     df_deudas = get_deudas()
     c_sel = st.selectbox("Selecciona la cuenta que quieres modificar:", df_deudas['acreedor'])
@@ -679,7 +706,10 @@ elif menu == "Deudas":
             nc = st.number_input("Tasa CAT (%):", value=cat_val, step=1.0)
             nd = st.number_input("Día de Pago Límite del Mes (1-31):", min_value=1, max_value=31, value=dia_val)
         if st.form_submit_button("Guardar Cambios de la Cuenta", use_container_width=True):
-            update_deuda_val(int(fila_d['id']), ns, nm, nc, nd)
+            conn = get_db()
+            conn.execute("UPDATE deudas SET saldo=?, pago_minimo=?, tasa_cat=?, dia_corte=? WHERE id=?", (ns, nm, nc, nd, int(fila_d['id'])))
+            conn.commit()
+            conn.close()
             st.success(f"¡{c_sel} actualizada correctamente!")
             st.rerun()
 
