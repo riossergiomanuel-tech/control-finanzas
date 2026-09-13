@@ -272,7 +272,7 @@ def add_movimiento(f, c, cat, t, m, met):
     update_billetera_delta(met, m, "restar")
 
 # ---------------------------------------------------------
-# MEJORA 4: CANDADO DE SEGURIDAD CON PIN
+# CANDADO DE SEGURIDAD CON PIN
 # ---------------------------------------------------------
 cfg = get_cfg()
 pin_guardado = str(int(cfg.get("pin_seguridad", 1234)))
@@ -297,7 +297,7 @@ if not st.session_state.autenticado:
     st.stop()
 
 # ---------------------------------------------------------
-# BARRA LATERAL (CONFIGURACIÓN Y NAVEGACIÓN)
+# BARRA LATERAL
 # ---------------------------------------------------------
 ingreso_base = cfg.get("ingreso_base", 3200.0)
 horas_extras = cfg.get("horas_extras_semana", 0.0)
@@ -378,7 +378,7 @@ if menu == "Dashboard":
         
     dinero_libre = max(0.0, ingreso_neto_semana - ahorro_meta - minimos_semana - reserva_esencial - gastos_variables)
 
-    # 4 TARJETAS PRINCIPALES
+    # 4 TARJETAS KPI
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.metric(label="💵 Ingreso Esta Semana", value=f"${ingreso_neto_semana:,.2f}", delta=f"Base: ${ingreso_base:,.2f}")
@@ -393,7 +393,7 @@ if menu == "Dashboard":
     with c4:
         st.metric(label="🚨 Deuda Total Acumulada", value=f"${total_deuda:,.2f}", delta=f"${minimos_totales:,.2f} mínimos/mes", delta_color="inverse")
 
-    # RECORDATORIO DE VENCIMIENTOS SEMANALES
+    # ALERTA DE VENCIMIENTOS
     proximos_7_dias = [(hoy + timedelta(days=i)).day for i in range(8)]
     vencimientos_semana = []
     total_minimos_semana = 0.0
@@ -418,7 +418,7 @@ if menu == "Dashboard":
         </div>
         """, unsafe_allow_html=True)
 
-    # CONTADOR DE LIBERTAD FINANCIERA
+    # PROYECCIÓN DE LIBERTAD FINANCIERA
     pago_semanal_estimado = max(200.0, minimos_semana + dinero_libre * 0.5)
     semanas_libertad = int(total_deuda / pago_semanal_estimado) if pago_semanal_estimado > 0 else 52
     fecha_libertad = hoy + timedelta(weeks=semanas_libertad)
@@ -432,7 +432,6 @@ if menu == "Dashboard":
     </div>
     """, unsafe_allow_html=True)
 
-    # GRÁFICOS Y SEMÁFORO DE GASTOS HORMIGA
     col_g1, col_g2 = st.columns()
     with col_g1:
         st.subheader("📊 Distribución de tus Deudas por Entidad")
@@ -447,7 +446,7 @@ if menu == "Dashboard":
         elif gastos_hormiga < presupuesto_hormiga:
             estado_semaforo = f"🟡 <b>Semáforo Amarillo:</b> Precaución. Has gastado ${gastos_hormiga:,.2f} de ${presupuesto_hormiga:,.2f}. Te quedan solo <b>${(presupuesto_hormiga - gastos_hormiga):,.2f}</b>."
         else:
-            estado_semaforo = f"🔴 <b>Semáforo Rojo:</b> ¡Tope alcanzado! Has gastado ${gastos_hormiga:,.2f} de${presupuesto_hormiga:,.2f}. Detén los antojos hasta el siguiente cobro."
+            estado_semaforo = f"🔴 <b>Semáforo Rojo:</b> ¡Tope alcanzado! Has gastado ${gastos_hormiga:,.2f} de ${presupuesto_hormiga:,.2f}. Detén los antojos hasta el siguiente cobro."
 
         st.markdown(f"""
         <div class="hormiga-card">
@@ -459,7 +458,7 @@ if menu == "Dashboard":
         """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# VISTA 2: FONDO DE AHORRO DEDICADO
+# VISTA 2: FONDO DE AHORRO
 # ---------------------------------------------------------
 elif menu == "💎 Fondo de Ahorro":
     st.title("💎 Mi Fondo de Ahorro (Dinero Guardado)")
@@ -537,7 +536,7 @@ elif menu == "💎 Fondo de Ahorro":
         )
 
 # ---------------------------------------------------------
-# VISTA 3: CALENDARIO DE VENCIMIENTOS SEMANALES
+# VISTA 3: VENCIMIENTOS SEMANALES
 # ---------------------------------------------------------
 elif menu == "📅 Vencimientos Semanales":
     st.title("📅 Calendario y Recordatorio de Pagos")
@@ -681,7 +680,7 @@ elif menu == "Asesor de Pagos":
     """)
 
 # ---------------------------------------------------------
-# VISTA 7: DEUDAS Y MEJORA 5 (RESPALDO EXCEL/CSV)
+# VISTA 7: DEUDAS Y RESPALDO EXCEL/CSV
 # ---------------------------------------------------------
 elif menu == "Deudas":
     st.title("💳 Administrar Saldos y Fechas de Deudas")
