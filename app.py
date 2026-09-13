@@ -351,6 +351,7 @@ if menu == "Dashboard":
         
     dinero_libre = max(0.0, ingreso_neto_semana - ahorro_meta - minimos_semana - reserva_esencial - gastos_variables)
 
+    # 4 TARJETAS KPI
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.metric(label="💵 Ingreso Esta Semana", value=f"${ingreso_neto_semana:,.2f}", delta=f"Base: ${ingreso_base:,.2f}")
@@ -404,7 +405,8 @@ if menu == "Dashboard":
     </div>
     """, unsafe_allow_html=True)
 
-    col_g1, col_g2 = st.columns()
+    # GRÁFICOS Y SEMÁFORO DE GASTOS HORMIGA
+    col_g1, col_g2 = st.columns(2)
     with col_g1:
         st.subheader("📊 Distribución de tus Deudas por Entidad")
         st.bar_chart(df_deudas.set_index("acreedor")['saldo'])
