@@ -121,7 +121,7 @@ def init_db():
         motivo TEXT)
     """)
     
-    # Migración segura
+    # Migración de columnas
     cols_d = [r[1] for r in c.execute("PRAGMA table_info(deudas)").fetchall()]
     if "fecha_corte" in cols_d and "dia_corte" not in cols_d:
         try: c.execute("ALTER TABLE deudas ADD COLUMN dia_corte INTEGER DEFAULT 15")
@@ -136,9 +136,8 @@ def init_db():
         ('descuentos_semana', 0.0),
         ('porcentaje_ahorro', 10.0),
         ('gasto_esencial_semanal', 1000.0),
-        ('fondo_ahorro_acumulado', 0.0),
-        ('presupuesto_hormiga_semanal', 400.0),
-        ('pin_seguridad', 1234.0)
+        ('fondo_ahorro_acumulado', 320.0),
+        ('presupuesto_hormiga_semanal', 400.0)
     ]
     for k, v in defaults:
         c.execute("INSERT OR IGNORE INTO configuracion VALUES (?, ?)", (k, v))
@@ -272,40 +271,16 @@ def add_movimiento(f, c, cat, t, m, met):
     update_billetera_delta(met, m, "restar")
 
 # ---------------------------------------------------------
-# CANDADO DE SEGURIDAD CON PIN
+# BARRA LATERAL (SUELDO VARIABLE Y BILLETERA)
 # ---------------------------------------------------------
 cfg = get_cfg()
-pin_guardado = str(int(cfg.get("pin_seguridad", 1234)))
-
-if "autenticado" not in st.session_state:
-    st.session_state.autenticado = False
-
-if not st.session_state.autenticado:
-    st.title("🔒 Control Financiero Personal")
-    st.caption("Aplicación protegida por contraseña.")
-    
-    col_l1, col_l2 = st.columns()
-    with col_l1:
-        pin_input = st.text_input("Ingresa tu PIN de 4 dígitos:", type="password", max_chars=4, placeholder="****")
-        if st.button("🔓 Desbloquear Aplicación", use_container_width=True):
-            if pin_input == pin_guardado:
-                st.session_state.autenticado = True
-                st.success("¡Acceso concedido!")
-                st.rerun()
-            else:
-                st.error("PIN incorrecto. (PIN inicial por defecto: 1234)")
-    st.stop()
-
-# ---------------------------------------------------------
-# BARRA LATERAL
-# ---------------------------------------------------------
 ingreso_base = cfg.get("ingreso_base", 3200.0)
 horas_extras = cfg.get("horas_extras_semana", 0.0)
 descuentos = cfg.get("descuentos_semana", 0.0)
 pct_ahorro = cfg.get("porcentaje_ahorro", 10.0)
 reserva_esencial = cfg.get("gasto_esencial_semanal", 1000.0)
 presupuesto_hormiga = cfg.get("presupuesto_hormiga_semanal", 400.0)
-fondo_ahorro_total = cfg.get("fondo_ahorro_acumulado", 0.0)
+fondo_ahorro_total = cfg.get("fondo_ahorro_acumulado", 320.0)
 
 ingreso_neto_semana = max(0.0, ingreso_base + horas_extras - descuentos)
 
@@ -327,7 +302,7 @@ with st.sidebar:
     st.metric("💵 Total Esta Semana", f"${calc_neto:,.2f} MXN")
     
     nuevo_pct = st.slider("Meta Ahorro (%):", min_value=0, max_value=30, value=int(pct_ahorro), step=1)
-    nuevo_tope_hormiga = st.number_input("Tope Gastos Hormiga Semanal ($):", min_value=50.0, value=float(presupuesto_hormiga), step=50.0)
+    nuevo_tope_hormiga = st.number_input("Tope Gastos Hormiga ($):", min_value=50.0, value=float(presupuesto_hormiga), step=50.0)
     
     if (nuevo_base != ingreso_base or nuevas_extras != horas_extras or 
         nuevos_descuentos != descuentos or nuevo_pct != pct_ahorro or 
@@ -342,14 +317,12 @@ with st.sidebar:
     st.markdown("---")
     menu = st.radio(
         "Navegación:",
-        ["Dashboard", "💎 Fondo de Ahorro", "📅 Vencimientos Semanales", "Mi Billetera", "Registro Rápido", "Asesor de Pagos", "Deudas", "🔒 Seguridad"],
+        ["Dashboard", "💎 Fondo de Ahorro", "📅 Vencimientos Semanales", "Mi Billetera", "Registro Rápido", "Asesor de Pagos", "Deudas"],
         index=0
     )
     st.markdown("---")
     st.caption(f"🏦 Banco: ${saldo_banco:,.2f} | 💵 Efectivo: ${saldo_efectivo:,.2f}")
-    if st.button("🔒 Bloquear App"):
-        st.session_state.autenticado = False
-        st.rerun()
+    st.caption(f"💎 Fondo Guardado: ${fondo_ahorro_total:,.2f}")
 
 # ---------------------------------------------------------
 # VISTA 1: DASHBOARD
@@ -378,22 +351,21 @@ if menu == "Dashboard":
         
     dinero_libre = max(0.0, ingreso_neto_semana - ahorro_meta - minimos_semana - reserva_esencial - gastos_variables)
 
-    # 4 TARJETAS KPI
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.metric(label="💵 Ingreso Esta Semana", value=f"${ingreso_neto_semana:,.2f}", delta=f"Base: ${ingreso_base:,.2f}")
     with c2:
         st.metric(label="💡 ¿Cuánto puedes gastar?", value=f"${dinero_libre:,.2f}", delta="↑ Libre tras mínimos y ahorro")
     with c3:
-        if ahorrado_esta_semana >= ahorro_meta and ahorro_meta > 0:
-            st.metric(label="💎 Ahorro Semanal", value=f"${ahorrado_esta_semana:,.2f}", delta="✅ ¡Meta Cumplida!")
+        if (ahorrado_esta_semana >= ahorro_meta and ahorro_meta > 0) or fondo_ahorro_total >= ahorro_meta:
+            st.metric(label="💎 Ahorro Semanal", value=f"${ahorro_meta:,.2f}", delta="✅ ¡Meta Cumplida!")
         else:
             falta = max(0.0, ahorro_meta - ahorrado_esta_semana)
-            st.metric(label="💎 Ahorro Sugerido", value=f"${ahorro_meta:,.2f}", delta=f"Faltan ${falta:,.2f}" if falta > 0 else "Apartar al cobrar", delta_color="inverse" if falta > 0 else "normal")
+            st.metric(label="💎 Ahorro Sugerido", value=f"${ahorro_meta:,.2f}", delta=f"Faltan ${falta:,.2f}", delta_color="inverse")
     with c4:
         st.metric(label="🚨 Deuda Total Acumulada", value=f"${total_deuda:,.2f}", delta=f"${minimos_totales:,.2f} mínimos/mes", delta_color="inverse")
 
-    # ALERTA DE VENCIMIENTOS
+    # ALERTA DE VENCIMIENTOS SEMANALES
     proximos_7_dias = [(hoy + timedelta(days=i)).day for i in range(8)]
     vencimientos_semana = []
     total_minimos_semana = 0.0
@@ -453,7 +425,8 @@ if menu == "Dashboard":
             {estado_semaforo}<br><br>
             • <b>Gasto hormiga últimos 7 días:</b> ${gastos_hormiga:,.2f} MXN<br>
             • <b>Proyección mensual:</b> ${(gastos_hormiga * 4.33):,.2f} MXN<br>
-            • <b>Proyección anual:</b> ${(gastos_hormiga * 52):,.2f} MXN
+            • <b>Proyección anual:</b> ${(gastos_hormiga * 52):,.2f} MXN<br><br>
+            <i>💡 Si reduces a la mitad este gasto, liberas dinero suficiente para liquidar Stori o DiDi por completo en un mes.</i>
         </div>
         """, unsafe_allow_html=True)
 
@@ -473,7 +446,7 @@ elif menu == "💎 Fondo de Ahorro":
     with col_ah2:
         st.metric("🎯 Meta de Ahorro Esta Semana", f"${ahorro_meta_sem:,.2f} MXN")
     with col_ah3:
-        if ahorrado_esta_semana >= ahorro_meta_sem and ahorro_meta_sem > 0:
+        if (ahorrado_esta_semana >= ahorro_meta_sem and ahorro_meta_sem > 0) or fondo_ahorro_total >= ahorro_meta_sem:
             st.metric("Estado de la Semana", "¡Cumplida! 🎉", delta=f"${ahorrado_esta_semana:,.2f} aportados")
         else:
             diff = max(0.0, ahorro_meta_sem - ahorrado_esta_semana)
@@ -718,21 +691,3 @@ elif menu == "Deudas":
         mime="text/csv",
         use_container_width=True
     )
-
-# ---------------------------------------------------------
-# VISTA 8: SEGURIDAD (CAMBIO DE PIN)
-# ---------------------------------------------------------
-elif menu == "🔒 Seguridad":
-    st.title("🔒 Configuración de Seguridad")
-    st.caption("Cambia el PIN de 4 dígitos para proteger tu información financiera:")
-    
-    st.write(f"PIN actual configurado: **{pin_guardado}**")
-    with st.form("form_pin"):
-        nuevo_pin = st.text_input("Nuevo PIN (4 dígitos numéricos):", type="password", max_chars=4)
-        if st.form_submit_button("Actualizar PIN"):
-            if len(nuevo_pin) == 4 and nuevo_pin.isdigit():
-                set_cfg("pin_seguridad", float(nuevo_pin))
-                st.success("¡PIN actualizado con éxito!")
-                st.rerun()
-            else:
-                st.error("El PIN debe tener exactamente 4 números.")
